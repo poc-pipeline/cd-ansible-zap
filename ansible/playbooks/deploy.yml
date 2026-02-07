@@ -1,0 +1,53 @@
+---
+# deploy.yml — Pull image from local registry and run the sample-app container
+# Satisfies: FR-CD-01, FR-CD-02, FR-CD-03
+
+- name: Deploy sample application
+  hosts: localhost
+  gather_facts: false
+  vars:
+    image_tag: "{{ image_tag | mandatory }}"
+    image_name: "localhost:5000/sample-app"
+    container_name: "sample-app"
+    app_port: 8080
+    network_name: "cd-ansible-zap_poc-network"
+
+  tasks:
+    - name: Pull application image from local registry
+      community.docker.docker_image:
+        name: "{{ image_name }}"
+        tag: "{{ image_tag }}"
+        source: pull
+        force_source: true
+
+    - name: Stop and remove existing container
+      community.docker.docker_container:
+        name: "{{ container_name }}"
+        state: absent
+      ignore_errors: true
+
+    - name: Start application container
+      community.docker.docker_container:
+        name: "{{ container_name }}"
+        image: "{{ image_name }}:{{ image_tag }}"
+        ports:
+          - "{{ app_port }}:{{ app_port }}"
+        networks:
+          - name: "{{ network_name }}"
+        restart_policy: unless-stopped
+        state: started
+
+    - name: Wait for application health check
+      ansible.builtin.uri:
+        url: "http://localhost:{{ app_port }}/health"
+        method: GET
+        return_content: true
+        status_code: 200
+      register: health_result
+      retries: 12
+      delay: 5
+      until: health_result.status == 200
+
+    - name: Display health check result
+      ansible.builtin.debug:
+        msg: "Application is healthy: {{ health_result.json }}"

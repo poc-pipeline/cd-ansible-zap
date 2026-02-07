@@ -1,0 +1,86 @@
+---
+# zap-scan.yml — Run OWASP ZAP baseline and active scans
+# Satisfies: FR-CD-04, FR-CD-05, FR-CD-06
+
+- name: Run OWASP ZAP security scans
+  hosts: localhost
+  gather_facts: false
+  vars:
+    target_url: "http://sample-app:8080"
+    network_name: "cd-ansible-zap_poc-network"
+    reports_dir: "{{ playbook_dir }}/../../reports"
+    zap_image: "ghcr.io/zaproxy/zaproxy:stable"
+    rules_file: "{{ playbook_dir }}/../../zap/rules.tsv"
+
+  tasks:
+    - name: Ensure reports directory exists
+      ansible.builtin.file:
+        path: "{{ reports_dir }}"
+        state: directory
+        mode: "0755"
+
+    - name: Run ZAP baseline scan
+      community.docker.docker_container:
+        name: zap-baseline
+        image: "{{ zap_image }}"
+        command: >
+          zap-baseline.py
+          -t {{ target_url }}
+          -J zap-baseline-report.json
+          -c /zap/wrk/rules.tsv
+        volumes:
+          - "{{ reports_dir }}:/zap/wrk/reports:rw"
+          - "{{ rules_file }}:/zap/wrk/rules.tsv:ro"
+        networks:
+          - name: "{{ network_name }}"
+        auto_remove: false
+        detach: false
+        state: started
+      register: baseline_result
+      ignore_errors: true
+
+    - name: Copy baseline report from container
+      ansible.builtin.command:
+        cmd: docker cp zap-baseline:/zap/wrk/zap-baseline-report.json {{ reports_dir }}/zap-baseline-report.json
+      ignore_errors: true
+
+    - name: Remove baseline scan container
+      community.docker.docker_container:
+        name: zap-baseline
+        state: absent
+      ignore_errors: true
+
+    - name: Run ZAP active (full) scan
+      community.docker.docker_container:
+        name: zap-full
+        image: "{{ zap_image }}"
+        command: >
+          zap-full-scan.py
+          -t {{ target_url }}
+          -J zap-full-report.json
+          -c /zap/wrk/rules.tsv
+        volumes:
+          - "{{ reports_dir }}:/zap/wrk/reports:rw"
+          - "{{ rules_file }}:/zap/wrk/rules.tsv:ro"
+        networks:
+          - name: "{{ network_name }}"
+        auto_remove: false
+        detach: false
+        state: started
+      register: full_result
+      ignore_errors: true
+
+    - name: Copy full scan report from container
+      ansible.builtin.command:
+        cmd: docker cp zap-full:/zap/wrk/zap-full-report.json {{ reports_dir }}/zap-full-report.json
+      ignore_errors: true
+
+    - name: Remove full scan container
+      community.docker.docker_container:
+        name: zap-full
+        state: absent
+      ignore_errors: true
+
+    - name: Display scan summary
+      ansible.builtin.debug:
+        msg: "ZAP scans completed. Reports saved to {{ reports_dir }}"

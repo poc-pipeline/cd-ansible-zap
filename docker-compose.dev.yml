@@ -1,0 +1,20 @@
+services:
+  sample-app:
+    image: localhost:5000/sample-app:${IMAGE_TAG:-latest}
+    container_name: sample-app
+    ports:
+      - "8080:8080"
+    networks:
+      - poc-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:8080/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+
+networks:
+  poc-network:
+    external: true
+    name: cd-ansible-zap_poc-network
