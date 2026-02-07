@@ -37,6 +37,7 @@ cd-ansible-zap/
 │       └── evaluate-report.yml        # Parse report, pass/fail gate
 ├── docker-compose.infra.yml           # Local registry (port 5000)
 ├── docker-compose.dev.yml             # Dev environment (app on port 8080)
+├── docker-compose.runner.yml          # GitHub Actions self-hosted runner
 ├── zap/rules.tsv                      # ZAP scan rule config
 └── reports/                           # ZAP report output directory
 ```
@@ -113,17 +114,70 @@ This will fail the pipeline if any High or Critical findings are detected.
 
 ## Setting Up GitHub Actions Self-Hosted Runner
 
-1. Go to your GitHub repository **Settings > Actions > Runners > New self-hosted runner**.
-2. Follow the instructions to download and configure the runner on your workstation.
-3. Add the labels `self-hosted` and `local-poc` to the runner.
-4. Start the runner:
+The self-hosted runner is containerized via `docker-compose.runner.yml` using the [`myoung34/github-runner`](https://github.com/myoung34/docker-github-actions-runner) image.
+
+### 1. Generate a Runner Registration Token
+
+Using GitHub CLI:
 
 ```bash
-cd actions-runner
-./run.sh
+gh api -X POST repos/poc-pipeline/cd-ansible-zap/actions/runners/registration-token --jq '.token'
 ```
 
+Or navigate to **Settings > Actions > Runners > New self-hosted runner** in the GitHub repository and copy the token shown during setup.
+
+> **Note:** Registration tokens expire after 1 hour. Generate a new one if the runner fails to register.
+
+### 2. Create a `.env` File
+
+Create a `.env` file in the project root (this file is gitignored):
+
+```bash
+RUNNER_TOKEN=<paste-your-registration-token-here>
+```
+
+### 3. Start the Runner
+
+Ensure the `poc-network` is already running (from the infra compose), then start the runner:
+
+```bash
+docker compose -f docker-compose.runner.yml up -d
+```
+
+### 4. Verify the Runner is Online
+
+Check the container logs:
+
+```bash
+docker logs github-runner
+```
+
+You should see output like:
+
+```
+√ Connected to GitHub
+Current runner version: '2.x.x'
+Listening for Jobs
+```
+
+You can also verify in GitHub: **Settings > Actions > Runners** — the runner should show as **Idle** with labels `self-hosted`, `Linux`, and `local-poc`.
+
+### 5. Runner Lifecycle
+
+| Action | Command |
+|---|---|
+| Start runner | `docker compose -f docker-compose.runner.yml up -d` |
+| Stop runner | `docker compose -f docker-compose.runner.yml down` |
+| View logs | `docker logs -f github-runner` |
+| Restart runner | `docker compose -f docker-compose.runner.yml restart` |
+
+### Docker-in-Docker Access
+
+The runner mounts the host Docker socket (`/var/run/docker.sock`), allowing it to build and push Docker images as part of CI workflows. This is required for the `docker build` and `docker push` steps in `ci.yml`.
+
 ### Required GitHub Secrets
+
+Configure these in **Settings > Secrets and variables > Actions**:
 
 | Secret | Description |
 |---|---|
@@ -147,7 +201,7 @@ cd actions-runner
 Once all components are configured:
 
 1. Ensure infrastructure is running: `docker compose -f docker-compose.infra.yml up -d`
-2. Ensure the GitHub Actions self-hosted runner is active.
+2. Ensure the self-hosted runner is active: `docker compose -f docker-compose.runner.yml up -d`
 3. Ensure AWX is running and the Workflow Template is configured.
 4. Push a commit to `main`:
 
@@ -168,6 +222,7 @@ The pipeline will automatically:
 Stop and remove all containers and volumes:
 
 ```bash
+docker compose -f docker-compose.runner.yml down
 docker compose -f docker-compose.dev.yml down
 docker compose -f docker-compose.infra.yml down -v
 docker rm -f sample-app zap-baseline zap-full 2>/dev/null

@@ -17,20 +17,31 @@
       ansible.builtin.file:
         path: "{{ reports_dir }}"
         state: directory
-        mode: "0755"
+        mode: "0777"
+
+    - name: Remove stale ZAP containers
+      community.docker.docker_container:
+        name: "{{ item }}"
+        state: absent
+      loop:
+        - zap-baseline
+        - zap-full
+      ignore_errors: true
 
     - name: Run ZAP baseline scan
       community.docker.docker_container:
         name: zap-baseline
         image: "{{ zap_image }}"
+        user: "root"
         command: >
           zap-baseline.py
           -t {{ target_url }}
           -J zap-baseline-report.json
           -c /zap/wrk/rules.tsv
+          -I
         volumes:
-          - "{{ reports_dir }}:/zap/wrk/reports:rw"
-          - "{{ rules_file }}:/zap/wrk/rules.tsv:ro"
+          - "{{ reports_dir | realpath }}:/zap/wrk:rw"
+          - "{{ rules_file | realpath }}:/zap/wrk/rules.tsv:ro"
         networks:
           - name: "{{ network_name }}"
         auto_remove: false
@@ -50,18 +61,21 @@
         state: absent
       ignore_errors: true
 
-    - name: Run ZAP active (full) scan
+    - name: Run ZAP full scan
       community.docker.docker_container:
         name: zap-full
         image: "{{ zap_image }}"
+        user: "root"
         command: >
           zap-full-scan.py
           -t {{ target_url }}
           -J zap-full-report.json
           -c /zap/wrk/rules.tsv
+          -I
+          -m 10
         volumes:
-          - "{{ reports_dir }}:/zap/wrk/reports:rw"
-          - "{{ rules_file }}:/zap/wrk/rules.tsv:ro"
+          - "{{ reports_dir | realpath }}:/zap/wrk:rw"
+          - "{{ rules_file | realpath }}:/zap/wrk/rules.tsv:ro"
         networks:
           - name: "{{ network_name }}"
         auto_remove: false
@@ -81,6 +95,16 @@
         state: absent
       ignore_errors: true
 
+    - name: List generated reports
+      ansible.builtin.find:
+        paths: "{{ reports_dir }}"
+        patterns: "*.json"
+      register: report_files
+
     - name: Display scan summary
       ansible.builtin.debug:
-        msg: "ZAP scans completed. Reports saved to {{ reports_dir }}"
+        msg: |
+          ZAP scans completed.
+          Baseline scan: {{ 'completed' if baseline_result is defined else 'skipped' }}
+          Full scan: {{ 'completed' if full_result is defined else 'skipped' }}
+          Reports found: {{ report_files.files | map(attribute='path') | list }}

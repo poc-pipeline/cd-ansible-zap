@@ -1,0 +1,29 @@
+services:
+  github-runner:
+    image: myoung34/github-runner:latest
+    container_name: github-runner
+    restart: unless-stopped
+    environment:
+      REPO_URL: https://github.com/poc-pipeline/cd-ansible-zap
+      RUNNER_TOKEN: ${RUNNER_TOKEN}
+      RUNNER_NAME: local-poc-runner
+      RUNNER_WORKDIR: /tmp/runner/work
+      RUNNER_GROUP: Default
+      LABELS: local-poc
+      RUNNER_SCOPE: repo
+      DISABLE_AUTO_UPDATE: "true"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - runner-work:/tmp/runner/work
+    networks:
+      - poc-network
+    security_opt:
+      - label:disable
+
+volumes:
+  runner-work:
+
+networks:
+  poc-network:
+    external: true
+    name: cd-ansible-zap_poc-network
