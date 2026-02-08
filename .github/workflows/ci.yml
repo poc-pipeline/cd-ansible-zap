@@ -22,11 +22,11 @@ jobs:
         run: |
           docker push localhost:5000/sample-app:${{ github.sha }}
 
-      - name: Trigger AWX deployment
+      - name: Trigger AWX CD pipeline
         run: |
           curl --fail --silent --show-error \
             -X POST \
             -H "Authorization: Bearer ${{ secrets.AWX_TOKEN }}" \
             -H "Content-Type: application/json" \
             -d '{"extra_vars": {"image_tag": "${{ github.sha }}"}}' \
-            "http://localhost:8043/api/v2/job_templates/${{ secrets.AWX_JOB_TEMPLATE_ID }}/launch/"
+            "http://localhost:8043/api/v2/workflow_job_templates/${{ secrets.AWX_WORKFLOW_TEMPLATE_ID }}/launch/"

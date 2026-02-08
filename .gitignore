@@ -37,6 +37,9 @@ docker-compose.override.yml
 # Ansible
 *.retry
 
+# AWX
+awx/config/SECRET_KEY
+
 # ZAP reports (generated at runtime)
 reports/*.json
 reports/*.html

@@ -1,0 +1,159 @@
+services:
+  awx-postgres:
+    image: postgres:15
+    container_name: awx-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: awx
+      POSTGRES_PASSWORD: awxpass
+      POSTGRES_DB: awx
+    volumes:
+      - awx-postgres-data:/var/lib/postgresql/data
+    networks:
+      - poc-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U awx"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  awx-redis:
+    image: redis:7
+    container_name: awx-redis
+    restart: unless-stopped
+    user: root
+    command: >
+      bash -c "
+        chown redis:redis /var/run/redis &&
+        exec gosu redis redis-server /etc/redis/redis.conf
+      "
+    volumes:
+      - ./awx/config/redis.conf:/etc/redis/redis.conf:ro
+      - redis-socket:/var/run/redis
+    networks:
+      - poc-network
+    healthcheck:
+      test: ["CMD", "redis-cli", "-s", "/var/run/redis/redis.sock", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  awx-init:
+    build: ./awx
+    image: awx-poc:24.6.1
+    container_name: awx-init
+    hostname: awx
+    user: root
+    command: >
+      bash -c "
+        awx-manage migrate --noinput &&
+        awx-manage createsuperuser --noinput --username admin --email admin@localhost 2>/dev/null || true &&
+        awx-manage update_password --username admin --password admin &&
+        awx-manage create_preload_data &&
+        awx-manage provision_instance --hostname=awx --node_type=hybrid &&
+        awx-manage add_receptor_address --instance=awx --address=awx --port=2222 --canonical &&
+        awx-manage register_queue --queuename=controlplane --instance_percent=100 &&
+        awx-manage register_queue --queuename=default --instance_percent=100 &&
+        echo 'AWX init completed successfully'
+      "
+    env_file:
+      - ./awx/config/environment.sh
+    environment:
+      DJANGO_SUPERUSER_PASSWORD: admin
+      RECEPTORCTL_SOCKET: /var/run/receptor/receptor.sock
+    volumes:
+      - ./awx/config/settings.py:/etc/tower/settings.py:ro
+      - ./awx/config/SECRET_KEY:/etc/tower/SECRET_KEY:ro
+      - ./awx/config/receptor.conf:/etc/receptor/receptor.conf:ro
+      - redis-socket:/var/run/redis
+      - supervisor-socket:/var/run/supervisor
+    networks:
+      - poc-network
+    depends_on:
+      awx-postgres:
+        condition: service_healthy
+      awx-redis:
+        condition: service_healthy
+
+  awx-web:
+    image: awx-poc:24.6.1
+    container_name: awx-web
+    hostname: awx
+    user: root
+    restart: unless-stopped
+    command: >
+      bash -c "
+        chown -R 1000:0 /var/run/awx-rsyslog /var/run/supervisor &&
+        exec supervisord -n -c /etc/supervisord_web.conf
+      "
+    env_file:
+      - ./awx/config/environment.sh
+    environment:
+      RECEPTORCTL_SOCKET: /var/run/receptor/receptor.sock
+    ports:
+      - "8043:8013"
+    volumes:
+      - ./awx/config/settings.py:/etc/tower/settings.py:ro
+      - ./awx/config/SECRET_KEY:/etc/tower/SECRET_KEY:ro
+      - ./awx/config/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./awx/config/receptor.conf:/etc/receptor/receptor.conf:ro
+      - ./ansible:/var/lib/awx/projects/cd-ansible-zap/ansible:ro
+      - ./reports:/var/lib/awx/projects/cd-ansible-zap/reports
+      - ./zap:/var/lib/awx/projects/cd-ansible-zap/zap:ro
+      - redis-socket:/var/run/redis
+      - supervisor-socket:/var/run/supervisor
+      - rsyslog-socket:/var/run/awx-rsyslog
+      - receptor-socket:/var/run/receptor
+    networks:
+      - poc-network
+    depends_on:
+      awx-init:
+        condition: service_completed_successfully
+
+  awx-task:
+    image: awx-poc:24.6.1
+    container_name: awx-task
+    hostname: awx
+    user: root
+    restart: unless-stopped
+    command: >
+      bash -c "
+        cp /tmp/receptor-seed.conf /etc/receptor/receptor.conf &&
+        chown -R 1000:0 /var/run/receptor /var/run/awx-rsyslog &&
+        receptor --config /etc/receptor/receptor.conf &
+        sleep 3 &&
+        exec supervisord -n -c /etc/supervisord_task.conf
+      "
+    env_file:
+      - ./awx/config/environment.sh
+    environment:
+      RECEPTORCTL_SOCKET: /var/run/receptor/receptor.sock
+    volumes:
+      - ./awx/config/settings.py:/etc/tower/settings.py:ro
+      - ./awx/config/SECRET_KEY:/etc/tower/SECRET_KEY:ro
+      - ./awx/config/receptor.conf:/tmp/receptor-seed.conf:ro
+      - ./ansible:/var/lib/awx/projects/cd-ansible-zap/ansible:ro
+      - ./reports:/var/lib/awx/projects/cd-ansible-zap/reports
+      - ./zap:/var/lib/awx/projects/cd-ansible-zap/zap:ro
+      - /var/run/docker.sock:/var/run/docker.sock
+      - redis-socket:/var/run/redis
+      - supervisor-socket:/var/run/supervisor
+      - rsyslog-socket:/var/run/awx-rsyslog
+      - receptor-socket:/var/run/receptor
+    networks:
+      - poc-network
+    depends_on:
+      awx-init:
+        condition: service_completed_successfully
+
+volumes:
+  awx-postgres-data:
+  redis-socket:
+  supervisor-socket:
+  rsyslog-socket:
+  receptor-socket:
+
+networks:
+  poc-network:
+    external: true
+    name: cd-ansible-zap_poc-network

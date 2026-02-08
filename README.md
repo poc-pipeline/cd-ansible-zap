@@ -35,7 +35,19 @@ cd-ansible-zap/
 │       ├── deploy.yml                 # Deploy container
 │       ├── zap-scan.yml               # Run ZAP scans
 │       └── evaluate-report.yml        # Parse report, pass/fail gate
+├── awx/
+│   ├── Dockerfile                     # Extends AWX image with receptor
+│   └── config/                        # AWX configuration files
+│       ├── settings.py                # Django settings (DB, Redis, secrets)
+│       ├── environment.sh             # Shell env vars (DB, admin creds)
+│       ├── nginx.conf                 # Nginx reverse proxy config
+│       ├── redis.conf                 # Redis Unix socket config
+│       ├── receptor.conf              # Receptor mesh config
+│       └── SECRET_KEY                 # Encryption key (gitignored)
+├── scripts/
+│   └── awx-setup.sh                   # Automated AWX resource setup
 ├── docker-compose.infra.yml           # Local registry (port 5000)
+├── docker-compose.awx.yml             # AWX (web, task, postgres, redis)
 ├── docker-compose.dev.yml             # Dev environment (app on port 8080)
 ├── docker-compose.runner.yml          # GitHub Actions self-hosted runner
 ├── zap/rules.tsv                      # ZAP scan rule config
@@ -181,28 +193,74 @@ Configure these in **Settings > Secrets and variables > Actions**:
 
 | Secret | Description |
 |---|---|
-| `AWX_TOKEN` | OAuth2 token for AWX API authentication |
-| `AWX_JOB_TEMPLATE_ID` | ID of the AWX Job Template to trigger |
+| `AWX_TOKEN` | API token for AWX authentication (from `awx-setup.sh` output) |
+| `AWX_WORKFLOW_TEMPLATE_ID` | Workflow Template ID (from `awx-setup.sh` output) |
 
 ## AWX Setup
 
-1. Deploy AWX using the [official AWX Operator](https://github.com/ansible/awx-operator) or Docker Compose method.
-2. Create a **Project** pointing to this repository.
-3. Create an **Inventory** using `ansible/inventory/local.yml`.
-4. Create **Job Templates** for each playbook:
-   - **Deploy** — runs `ansible/playbooks/deploy.yml` with `image_tag` as a survey variable
-   - **ZAP Scan** — runs `ansible/playbooks/zap-scan.yml`
-   - **Evaluate Report** — runs `ansible/playbooks/evaluate-report.yml`
-5. Create a **Workflow Template** chaining: Deploy → ZAP Scan → Evaluate Report.
-6. Generate an API token under **Users > Tokens** for GitHub Actions integration.
+AWX is deployed via Docker Compose with five services: PostgreSQL, Redis, an init container (migrations + admin user), the web UI/API, and the task runner.
+
+### 1. Start AWX
+
+Ensure the infrastructure network is running first, then start AWX:
+
+```bash
+docker compose -f docker-compose.infra.yml up -d
+docker compose -f docker-compose.awx.yml up -d
+```
+
+The init container (`awx-init`) runs database migrations and creates the admin user. This takes 2-3 minutes on first launch. Monitor progress:
+
+```bash
+docker logs -f awx-init
+```
+
+Wait until you see `AWX init completed successfully`, then verify the API is reachable:
+
+```bash
+curl http://localhost:8043/api/v2/ping/
+```
+
+The AWX web UI is available at `http://localhost:8043` (username: `admin`, password: `admin`).
+
+### 2. Run the Setup Script
+
+The setup script automatically creates all AWX resources via the REST API:
+
+```bash
+bash scripts/awx-setup.sh
+```
+
+This creates:
+- **Inventory** — localhost with local connection
+- **Project** — manual project pointing to mounted playbooks
+- **Job Templates** — Deploy, ZAP Scan, Evaluate Report
+- **Workflow Template** — Deploy → ZAP Scan → Evaluate Report
+- **API Token** — for GitHub Actions authentication
+
+The script outputs the values needed for GitHub secrets.
+
+### 3. Configure GitHub Secrets
+
+Copy the values from the setup script output and add them as repository secrets in **Settings > Secrets and variables > Actions**.
+
+### AWX Lifecycle
+
+| Action | Command |
+|---|---|
+| Start AWX | `docker compose -f docker-compose.awx.yml up -d` |
+| Stop AWX | `docker compose -f docker-compose.awx.yml down` |
+| View web logs | `docker logs -f awx-web` |
+| View task logs | `docker logs -f awx-task` |
+| Reset AWX (destroy data) | `docker compose -f docker-compose.awx.yml down -v` |
 
 ## Full Pipeline End-to-End
 
 Once all components are configured:
 
 1. Ensure infrastructure is running: `docker compose -f docker-compose.infra.yml up -d`
-2. Ensure the self-hosted runner is active: `docker compose -f docker-compose.runner.yml up -d`
-3. Ensure AWX is running and the Workflow Template is configured.
+2. Ensure AWX is running: `docker compose -f docker-compose.awx.yml up -d`
+3. Ensure the self-hosted runner is active: `docker compose -f docker-compose.runner.yml up -d`
 4. Push a commit to `main`:
 
 ```bash
@@ -223,6 +281,7 @@ Stop and remove all containers and volumes:
 
 ```bash
 docker compose -f docker-compose.runner.yml down
+docker compose -f docker-compose.awx.yml down -v
 docker compose -f docker-compose.dev.yml down
 docker compose -f docker-compose.infra.yml down -v
 docker rm -f sample-app zap-baseline zap-full 2>/dev/null
@@ -235,5 +294,9 @@ docker rm -f sample-app zap-baseline zap-full 2>/dev/null
 | Registry unreachable | Ensure `docker compose -f docker-compose.infra.yml up -d` is running |
 | App health check fails | Check container logs: `docker logs sample-app` |
 | ZAP cannot reach app | Ensure both containers are on `cd-ansible-zap_poc-network` |
-| AWX trigger fails | Verify `AWX_TOKEN` and `AWX_JOB_TEMPLATE_ID` secrets are set correctly |
+| AWX trigger fails | Verify `AWX_TOKEN` and `AWX_WORKFLOW_TEMPLATE_ID` secrets are set correctly |
+| AWX init takes too long | First run can take 2-3 min; monitor with `docker logs -f awx-init` |
+| AWX API not responding | Check `docker logs awx-web`; ensure init completed first |
+| AWX setup script fails | Ensure AWX API is reachable: `curl http://localhost:8043/api/v2/ping/` |
+| ZAP paths wrong in AWX | Re-run `awx-setup.sh` — it detects host-absolute paths automatically |
 | Ansible collection missing | Run `ansible-galaxy collection install community.docker` |
