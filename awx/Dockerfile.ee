@@ -1,0 +1,8 @@
+FROM quay.io/ansible/awx-ee:latest
+
+USER root
+
+RUN pip3 install --no-cache-dir --target=/usr/lib/python3.9/site-packages docker requests && \
+    ansible-galaxy collection install community.docker
+
+USER 1000

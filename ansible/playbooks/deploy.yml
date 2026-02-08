@@ -10,6 +10,7 @@
     image_name: "localhost:5000/sample-app"
     container_name: "sample-app"
     app_port: 8080
+    app_host: "localhost"
     network_name: "cd-ansible-zap_poc-network"
 
   tasks:
@@ -39,7 +40,7 @@
 
     - name: Wait for application health check
       ansible.builtin.uri:
-        url: "http://localhost:{{ app_port }}/health"
+        url: "http://{{ app_host }}:{{ app_port }}/health"
         method: GET
         return_content: true
         status_code: 200

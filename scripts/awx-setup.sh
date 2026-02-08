@@ -36,7 +36,7 @@ echo ""
 
 # ── 1. Wait for AWX API ───────────────────────────────────────────────────────
 
-echo "--- [1/7] Waiting for AWX API readiness..."
+echo "--- [1/9] Waiting for AWX API readiness..."
 MAX_WAIT=180
 ELAPSED=0
 until awx_api GET /ping/ -o /dev/null 2>/dev/null; do
@@ -52,7 +52,7 @@ echo "  AWX API is ready."
 
 # ── 2. Get Default Organization ───────────────────────────────────────────────
 
-echo "--- [2/7] Getting Default organization..."
+echo "--- [2/9] Getting Default organization..."
 ORG_ID=$(awx_api GET /organizations/ | python3 -c "
 import sys, json
 for r in json.load(sys.stdin)['results']:
@@ -61,9 +61,20 @@ for r in json.load(sys.stdin)['results']:
 ")
 echo "  Organization ID: ${ORG_ID}"
 
-# ── 3. Create Inventory ──────────────────────────────────────────────────────
+# ── 3. Configure EE Settings ────────────────────────────────────────────────
 
-echo "--- [3/7] Creating Inventory..."
+echo "--- [3/8] Configuring Execution Environment settings..."
+awx_api PATCH /settings/jobs/ \
+  -d "{
+    \"AWX_ISOLATION_SHOW_PATHS\": [\"/var/run/docker.sock\", \"${HOST_REPORTS_DIR}\"],
+    \"DEFAULT_CONTAINER_RUN_OPTIONS\": [\"--network\", \"cd-ansible-zap_poc-network\"]
+  }" > /dev/null
+echo "  AWX_ISOLATION_SHOW_PATHS: /var/run/docker.sock, ${HOST_REPORTS_DIR}"
+echo "  DEFAULT_CONTAINER_RUN_OPTIONS: --network cd-ansible-zap_poc-network"
+
+# ── 4. Create Inventory ──────────────────────────────────────────────────────
+
+echo "--- [4/9] Creating Inventory..."
 INV_ID=$(awx_api POST /inventories/ \
   -d "{
     \"name\": \"PoC Local Inventory\",
@@ -80,9 +91,9 @@ awx_api POST /inventories/${INV_ID}/hosts/ \
   }' > /dev/null
 echo "  Host added."
 
-# ── 4. Create Manual Project ─────────────────────────────────────────────────
+# ── 5. Create Manual Project ─────────────────────────────────────────────────
 
-echo "--- [4/7] Creating Manual Project..."
+echo "--- [5/9] Creating Manual Project..."
 PROJ_ID=$(awx_api POST /projects/ \
   -d "{
     \"name\": \"CD Ansible ZAP\",
@@ -93,9 +104,26 @@ PROJ_ID=$(awx_api POST /projects/ \
   }" | python3 -c "import sys,json; print(json.load(sys.stdin)['id'])")
 echo "  Project ID: ${PROJ_ID}"
 
-# ── 5. Create Job Templates ──────────────────────────────────────────────────
+# ── 6. Create Execution Environment ──────────────────────────────────────────────────
 
-echo "--- [5/7] Creating Job Templates..."
+echo "--- [6/9] Creating Execution Environment..."
+EE_ID=$(awx_api POST /execution_environments/ \
+  -d "{
+    \"name\": \"AWX EE (Default)\",
+    \"image\": \"localhost:5000/awx-ee-poc:latest\",
+    \"organization\": ${ORG_ID},
+    \"pull\": \"missing\"
+  }" | python3 -c "import sys,json; print(json.load(sys.stdin)['id'])")
+echo "  Execution Environment ID: ${EE_ID}"
+
+echo "  Setting as default EE..."
+awx_api PATCH /organizations/${ORG_ID}/ \
+  -d "{\"default_environment\": ${EE_ID}}" > /dev/null
+echo "  Default EE set."
+
+# ── 7. Create Job Templates ──────────────────────────────────────────────────
+
+echo "--- [7/9] Creating Job Templates..."
 
 # Deploy Job Template
 DEPLOY_JT_ID=$(awx_api POST /job_templates/ \
@@ -106,6 +134,7 @@ DEPLOY_JT_ID=$(awx_api POST /job_templates/ \
     \"project\": ${PROJ_ID},
     \"playbook\": \"ansible/playbooks/deploy.yml\",
     \"ask_variables_on_launch\": true,
+    \"extra_vars\": \"app_host: sample-app\",
     \"description\": \"Deploy sample-app container from local registry\"
   }" | python3 -c "import sys,json; print(json.load(sys.stdin)['id'])")
 echo "  Deploy JT ID: ${DEPLOY_JT_ID}"
@@ -138,7 +167,7 @@ echo "  Evaluate JT ID: ${EVAL_JT_ID}"
 
 # ── 6. Create Workflow Template ───────────────────────────────────────────────
 
-echo "--- [6/7] Creating Workflow Template..."
+echo "--- [8/9] Creating Workflow Template..."
 WF_ID=$(awx_api POST /workflow_job_templates/ \
   -d "{
     \"name\": \"CD Pipeline — Deploy, Scan, Evaluate\",
@@ -169,7 +198,7 @@ echo "  Workflow chain: Deploy → ZAP Scan → Evaluate Report"
 
 # ── 7. Generate API Token ────────────────────────────────────────────────────
 
-echo "--- [7/7] Generating API token..."
+echo "--- [9/9] Generating API token..."
 ADMIN_ID=$(awx_api GET /users/ | python3 -c "
 import sys, json
 for r in json.load(sys.stdin)['results']:

@@ -136,6 +136,8 @@ services:
       - ./reports:/var/lib/awx/projects/cd-ansible-zap/reports
       - ./zap:/var/lib/awx/projects/cd-ansible-zap/zap:ro
       - /var/run/docker.sock:/var/run/docker.sock
+      - /tmp/awx-jobs:/tmp/awx-jobs
+      - ./reports:${PWD}/reports
       - redis-socket:/var/run/redis
       - supervisor-socket:/var/run/supervisor
       - rsyslog-socket:/var/run/awx-rsyslog
