@@ -37,6 +37,7 @@ cd-ansible-zap/
 │       └── evaluate-report.yml        # Parse report, pass/fail gate
 ├── awx/
 │   ├── Dockerfile                     # Extends AWX image with receptor
+│   ├── Dockerfile.ee                  # Execution Environment image
 │   └── config/                        # AWX configuration files
 │       ├── settings.py                # Django settings (DB, Redis, secrets)
 │       ├── environment.sh             # Shell env vars (DB, admin creds)
@@ -51,8 +52,22 @@ cd-ansible-zap/
 ├── docker-compose.dev.yml             # Dev environment (app on port 8080)
 ├── docker-compose.runner.yml          # GitHub Actions self-hosted runner
 ├── zap/rules.tsv                      # ZAP scan rule config
-└── reports/                           # ZAP report output directory
+├── reports/                           # ZAP report output directory
+└── docs/                             # Technical documentation
+    ├── architecture.md               # Architecture overview with diagrams
+    ├── pipeline-workflow.md          # Pipeline flow and sequence diagrams
+    ├── technical-design.md           # Design decisions and workarounds
+    └── component-reference.md        # Detailed component reference
 ```
+
+## Documentation
+
+| Document | Description |
+|---|---|
+| [Architecture Overview](docs/architecture.md) | System architecture, Docker network topology, container relationships, and technology stack |
+| [Pipeline Workflow](docs/pipeline-workflow.md) | End-to-end pipeline flow, CI/CD phases, sequence diagrams, and security gate logic |
+| [Technical Design](docs/technical-design.md) | Design decisions, volume mount strategy, AWX configuration, and security considerations |
+| [Component Reference](docs/component-reference.md) | Detailed reference for all playbooks, AWX configuration, ZAP rules, and CI workflow |
 
 ## Quick Start
 
@@ -234,6 +249,7 @@ bash scripts/awx-setup.sh
 This creates:
 - **Inventory** — localhost with local connection
 - **Project** — manual project pointing to mounted playbooks
+- **Execution Environment** — custom EE with `community.docker` and Docker SDK
 - **Job Templates** — Deploy, ZAP Scan, Evaluate Report
 - **Workflow Template** — Deploy → ZAP Scan → Evaluate Report
 - **API Token** — for GitHub Actions authentication
@@ -300,3 +316,5 @@ docker rm -f sample-app zap-baseline zap-full 2>/dev/null
 | AWX setup script fails | Ensure AWX API is reachable: `curl http://localhost:8043/api/v2/ping/` |
 | ZAP paths wrong in AWX | Re-run `awx-setup.sh` — it detects host-absolute paths automatically |
 | Ansible collection missing | Run `ansible-galaxy collection install community.docker` |
+| EE container not found | Build and push: `docker build -t localhost:5000/awx-ee-poc:latest -f awx/Dockerfile.ee awx/ && docker push localhost:5000/awx-ee-poc:latest` |
+| Runner not connecting | Verify `RUNNER_TOKEN` in `.env` is fresh (expires after 1 hour); regenerate and restart runner |
